@@ -99,10 +99,11 @@
   .rate { font: 700 clamp(22px, 2vw, 36px)/1 ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
   .rate small { font-size: 13px; color: var(--dim); font-weight: 400; margin-left: 6px; }
   #spark { width: 100%; height: 64px; display: block; margin-top: 8px; }
-  .feed { display: grid; gap: 6px; }
-  .feed div { font: 13px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; color: #e9e3c8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; animation: in .6s ease; }
+  .feed { position: relative; height: calc(4 * 24px); overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+  .feed .rows { transition: transform 1.2s cubic-bezier(.25, .8, .25, 1); }
+  .feed .rows div { height: 24px; font: 13px/24px ui-monospace, SFMono-Regular, Menlo, monospace; color: #e9e3c8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: opacity 1.2s ease; }
   .feed div b { color: var(--amber); font-weight: 650; }
-  .feed .empty { color: var(--dim); animation: none; }
+  .feed .empty { color: var(--dim); font: 13px/24px ui-monospace, SFMono-Regular, Menlo, monospace; }
   @keyframes in { from { opacity: 0; transform: translateY(6px); } }
   .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 10px; }
   .stat .v { font: 700 clamp(18px, 1.6vw, 30px)/1.1 ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
@@ -177,7 +178,7 @@
     </div>
     <div>
       <div class="panel-title">Latest findings</div>
-      <div class="feed" id="feed"><div class="empty">Findings appear here as agents report them.</div></div>
+      <div class="feed" id="feed"><div class="rows" id="feed-rows"><div class="empty">Findings appear here as agents report them.</div></div></div>
     </div>
     <div>
       <div class="stats">
@@ -196,7 +197,7 @@
   const $ = (id) => document.getElementById(id);
   const params = new URLSearchParams(location.search);
   const GAP_MS = params.has("spot") ? Number(params.get("spot")) * 1000 : 8_000;
-  let job = "", skew = 0, spot = -1, feedKey = "";
+  let job = "", skew = 0, spot = -1;
   const agents = new Map(); // index -> { stats, events, at, seen }
   const findings = [];
   const samples = []; // [time, total tokens]
@@ -223,9 +224,9 @@
   $("grid").replaceChildren(...cards);
 
   function reset(id) {
-    job = id; agents.clear(); findings.length = 0; samples.length = 0; feedKey = "";
+    job = id; agents.clear(); findings.length = 0; samples.length = 0;
     cards.forEach((c) => { c.className = "card idle"; c.q(".line").textContent = ""; c.typing = { text: "", shown: 0, kind: "think" }; });
-    $("feed").innerHTML = `<div class="empty">Findings appear here as agents report them.</div>`;
+    $("feed-rows").innerHTML = `<div class="empty">Findings appear here as agents report them.</div>`;
     closeSpot();
   }
 
@@ -248,22 +249,13 @@
       c.classList.add("ping"); setTimeout(() => c.classList.remove("ping"), 250);
     }
     for (const e of events) {
-      if (e.kind === "find") {
-        // History replayed on page load doesn't flash; only fresh finds do.
-        if (Date.now() + skew - e.at > 5000) { findings.push({ name: stats.name, text: e.text, at: e.at }); continue; }
-        c.classList.add("found"); clearTimeout(c.foundT); c.foundT = setTimeout(() => c.classList.remove("found"), 2500);
-        findings.push({ name: stats.name, text: e.text, at: e.at });
-      }
-    }
-    if (findings.length) {
-      findings.sort((x, y) => y.at - x.at);
-      findings.length = Math.min(findings.length, 4);
-      // Re-render only when a new finding arrives, so rows don't keep re-fading.
-      const key = findings.map((x) => x.at + x.name).join("|");
-      if (key !== feedKey) {
-        feedKey = key;
-        $("feed").innerHTML = findings.map((x) => `<div><b>★ ${esc(x.name)}</b> ${esc(x.text)}</div>`).join("");
-      }
+      if (e.kind !== "find") continue;
+      const item = { name: stats.name, text: e.text, at: e.at };
+      // History replayed on page load fills the feed quietly; only fresh finds flash.
+      if (Date.now() + skew - e.at > 5000) { seedFeed(item); continue; }
+      c.classList.add("found"); clearTimeout(c.foundT); c.foundT = setTimeout(() => c.classList.remove("found"), 2500);
+      findings.push(item);
+      findings.splice(0, Math.max(0, findings.length - 6)); // keep only the newest few waiting
     }
     if (index === spot) pushTerm(events);
   }
@@ -277,6 +269,42 @@
       c.q(".line").innerHTML = `<span class="g ${t.kind}">${GLYPH[t.kind] ?? "·"}</span>${esc(t.text.slice(0, t.shown))}`;
     }
     requestAnimationFrame(type);
+  }
+
+  // ---- Findings ticker ---------------------------------------------------------
+  // One new finding at most every few seconds: it slides in at the top and the
+  // rest ease down, so the feed reads like a calm ticker, not a flicker.
+  const FEED_ROWS = 4, FEED_MS = 3500;
+  const feedRows = () => $("feed-rows");
+  const feedRow = (x) => {
+    const d = document.createElement("div");
+    d.innerHTML = `<b>★ ${esc(x.name)}</b> ${esc(x.text)}`;
+    return d;
+  };
+  function seedFeed(x) {
+    const rows = feedRows();
+    rows.querySelector(".empty")?.remove();
+    if (rows.children.length >= FEED_ROWS) return;
+    rows.append(feedRow(x));
+  }
+  function feedTick() {
+    const x = findings.pop();
+    findings.length = 0;
+    if (x) {
+      const rows = feedRows();
+      rows.querySelector(".empty")?.remove();
+      const d = feedRow(x);
+      d.style.opacity = "0";
+      rows.style.transition = "none";
+      rows.style.transform = "translateY(-24px)";
+      rows.prepend(d);
+      rows.getBoundingClientRect();
+      rows.style.transition = "";
+      rows.style.transform = "translateY(0)";
+      d.style.opacity = "1";
+      while (rows.children.length > FEED_ROWS + 1) rows.lastChild.remove();
+    }
+    setTimeout(feedTick, FEED_MS);
   }
 
   // ---- Spotlight ---------------------------------------------------------------
@@ -468,6 +496,7 @@
   tick();
   type();
   typeTerm();
+  feedTick();
   director();
 </script>
 </body>

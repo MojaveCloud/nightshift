@@ -6,7 +6,7 @@
 // agent's steps are generated, not model calls: this is a stand-in for real
 // agent work, so the demo costs nothing but the machines it runs on. Every
 // second it sends its new steps and counters to the app ($NIGHTSHIFT_URL).
-import { assignment, rng } from "./missions.js";
+import { assignment, rng, GENERAL } from "./missions.js";
 
 const minutes = Number(process.argv[2] ?? process.env.AGENT_MINUTES ?? 120);
 const index = Number(process.env.MOJAVE_TASK_INDEX ?? 0);
@@ -20,6 +20,21 @@ const r = rng(Date.now() ^ (index * 104729));
 const started = Date.now();
 const deadline = started + minutes * 60_000;
 const pick = (xs) => xs[Math.floor(r() * xs.length)];
+// Draw from a bank without repeating until it runs out, so a trace never says
+// the same thing twice in a row.
+const bags = new Map();
+function draw(xs) {
+  let bag = bags.get(xs);
+  if (!bag || !bag.length) {
+    const last = bag?.last;
+    bag = [...xs].sort(() => r() - 0.5);
+    if (bag[0] === last && bag.length > 1) bag.push(bag.shift());
+    bags.set(xs, bag);
+  }
+  const x = bag.shift();
+  bag.last = x;
+  return x;
+}
 const int = (lo, hi) => Math.floor(lo + r() * (hi - lo + 1));
 
 let tokens = 0, toolCalls = 0, findings = 0, items = 0, step = 0;
@@ -29,6 +44,7 @@ function fill(text) {
   return text
     .replaceAll("{n}", String(Math.max(1, items)))
     .replaceAll("{k}", String(int(100, 99999)))
+    .replaceAll("{s}", String(int(3, 48)))
     .replaceAll("{c}", a.company);
 }
 
@@ -85,9 +101,11 @@ while (Date.now() < deadline - 20_000) {
   await sleep(int(450, 2200));
   advance();
   const x = r();
-  if (x < 0.5) emit("tool", pick(m.tools));
-  else if (x < 0.9) emit("think", pick(m.think));
-  else emit("find", pick(m.finds));
+  // Findings are rare: each agent reports one every few minutes.
+  const own = r() < 0.65; // most lines are about the mission, some are general agent work
+  if (x < 0.55) emit("tool", draw(own ? m.tools : GENERAL.tools));
+  else if (x < 0.99) emit("think", draw(own ? m.think : GENERAL.think));
+  else emit("find", draw(m.finds));
   if (r() < 0.04) emit("check", `Checkpoint: ${items.toLocaleString("en-US")} of ${a.total.toLocaleString("en-US")} ${a.unit} done`);
   if (Date.now() - lastFlush >= 1000) { await flush(); lastFlush = Date.now(); }
 }

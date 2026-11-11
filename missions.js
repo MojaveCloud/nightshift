@@ -3,7 +3,7 @@
 //
 // Each mission names a unit of work and a total, plus banks of lines the agent
 // draws from: what it thinks, which tools it calls, and what it finds.
-// {n} is the item it's on, {c} the company, {k} a random number.
+// {n} is the item it's on, {c} the company, {k} a random number, {s} a small one.
 
 export const COMPANIES = [
   "Halcyon Freight", "Brightwater Health", "Corvid Insurance", "Lumen Grid", "Pinecrest Bank",
@@ -133,3 +133,30 @@ export function assignment(index) {
     mission: m,
   };
 }
+
+// Lines any agent might say, mixed in with its mission's own, so a long trace
+// doesn't cycle through the same few.
+export const GENERAL = {
+  think: [
+    "Splitting the remaining work into batches of 50 so a failure doesn't cost much",
+    "That result looks off; re-running the last batch to confirm",
+    "Two sources disagree; trusting the system of record and noting the conflict",
+    "Context is getting long; summarizing progress so far before continuing",
+    "Skipping {s} items that were already handled in an earlier pass",
+    "Upstream API returned 429; waiting 4 s and retrying",
+    "Found a faster path: the index covers this, no need for a full scan",
+    "Double-checking edge cases before marking this batch done",
+    "Writing intermediate results to disk in case the run is interrupted",
+    "Grouping similar items so one decision covers many",
+    "Confidence is low on item {n}; flagging it for a human instead of guessing",
+    "Progress is on pace to finish well inside the time budget",
+  ],
+  tools: [
+    "save_checkpoint(step={k})",
+    "http.get('https://api.internal/status')",
+    "write_file('notes/progress.md')",
+    "sql(\"SELECT count(*) FROM queue WHERE done = false\")",
+    "retry(last_call, backoff='4s')",
+    "summarize(context, max_tokens=800)",
+  ],
+};
